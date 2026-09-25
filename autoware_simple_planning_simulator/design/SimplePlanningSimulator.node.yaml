@@ -14,9 +14,6 @@ launch:
 
 # interfaces
 subscribers:
-  - name: map/vector_map
-    message_type: autoware_map_msgs/msg/LaneletMapBin
-    remap_target: input/vector_map
   - name: initialpose3d
     message_type: geometry_msgs/msg/PoseWithCovarianceStamped
     remap_target: input/initialpose
@@ -110,8 +107,6 @@ param_values:
   - name: add_measurement_noise
     default: false
   - name: initial_engage_state
-    default: true
-  - name: enable_road_slope_simulation
     default: true
   - name: enable_pub_steer
     default: true

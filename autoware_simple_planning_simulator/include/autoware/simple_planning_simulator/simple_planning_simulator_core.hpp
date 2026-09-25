@@ -20,7 +20,6 @@
 #include "rclcpp/rclcpp.hpp"
 
 #include "autoware_control_msgs/msg/control.hpp"
-#include "autoware_map_msgs/msg/lanelet_map_bin.hpp"
 #include "autoware_planning_msgs/msg/trajectory.hpp"
 #include "autoware_vehicle_msgs/msg/actuation_command_stamped.hpp"
 #include "autoware_vehicle_msgs/msg/actuation_report_stamped.hpp"
@@ -45,9 +44,8 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 
-#include <lanelet2_core/geometry/Lanelet.h>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.hpp>
+#include <tf2_ros/transform_listener.hpp>
 
 #include <memory>
 #include <optional>
@@ -60,7 +58,6 @@ namespace autoware::simulator::simple_planning_simulator
 {
 
 using autoware_control_msgs::msg::Control;
-using autoware_map_msgs::msg::LaneletMapBin;
 using autoware_planning_msgs::msg::Trajectory;
 using autoware_vehicle_msgs::msg::ActuationCommandStamped;
 using autoware_vehicle_msgs::msg::ActuationReportStamped;
@@ -143,7 +140,6 @@ private:
   rclcpp::Subscription<TurnIndicatorsCommand>::SharedPtr sub_turn_indicators_cmd_;
   rclcpp::Subscription<HazardLightsCommand>::SharedPtr sub_hazard_lights_cmd_;
   rclcpp::Subscription<Control>::SharedPtr sub_manual_ackermann_cmd_;
-  rclcpp::Subscription<LaneletMapBin>::SharedPtr sub_map_;
   rclcpp::Subscription<PoseWithCovarianceStamped>::SharedPtr sub_init_pose_;
   rclcpp::Subscription<TwistStamped>::SharedPtr sub_init_twist_;
   rclcpp::Subscription<Trajectory>::SharedPtr sub_trajectory_;
@@ -164,7 +160,6 @@ private:
   rcl_interfaces::msg::SetParametersResult on_parameter(
     const std::vector<rclcpp::Parameter> & parameters);
 
-  lanelet::ConstLanelets road_lanelets_;
 
   /* tf */
   tf2_ros::Buffer tf_buffer_;
@@ -185,7 +180,6 @@ private:
   Trajectory::ConstSharedPtr current_trajectory_ptr_{};
   bool simulate_motion_ = true;  //!< stop vehicle motion simulation if false
   ControlModeReport current_control_mode_{};
-  bool enable_road_slope_simulation_ = true;
 
   // if false, it is expected to be converted and published from actuation_status in other nodes
   // (e.g. raw_vehicle_cmd_converter)
@@ -249,10 +243,6 @@ private:
    */
   void on_hazard_lights_cmd(const HazardLightsCommand::ConstSharedPtr msg);
 
-  /**
-   * @brief subscribe lanelet map
-   */
-  void on_map(const LaneletMapBin::ConstSharedPtr msg);
 
   /**
    * @brief set initial pose for simulation with received message
@@ -298,11 +288,6 @@ private:
    */
   TransformStamped get_transform_msg(const std::string parent_frame, const std::string child_frame);
 
-  /**
-   * @brief calculate ego pitch angle from trajectory
-   * @return ego pitch angle
-   */
-  double calculate_ego_pitch() const;
 
   /**
    * @brief timer callback for simulation with loop_rate

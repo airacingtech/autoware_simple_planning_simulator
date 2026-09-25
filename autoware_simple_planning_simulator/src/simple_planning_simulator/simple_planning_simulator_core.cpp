@@ -14,7 +14,6 @@
 
 #include "autoware/simple_planning_simulator/simple_planning_simulator_core.hpp"
 
-#include "autoware/motion_utils/trajectory/trajectory.hpp"
 #include "autoware/simple_planning_simulator/vehicle_model/sim_model.hpp"
 #include "autoware/simple_planning_simulator/vehicle_model/sim_model_actuation_cmd.hpp"
 #include "autoware_utils_geometry/geometry.hpp"
@@ -23,14 +22,8 @@
 #include "autoware_vehicle_info_utils/vehicle_info_utils.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 
-#include <autoware/lanelet2_utils/conversion.hpp>
-#include <autoware/lanelet2_utils/nn_search.hpp>
-#include <autoware_lanelet2_extension/utility/query.hpp>
 #include <tf2/LinearMath/Quaternion.hpp>
 #include <tf2/utils.hpp>
-
-#include <lanelet2_routing/RoutingGraph.h>
-#include <lanelet2_traffic_rules/TrafficRulesFactory.h>
 
 #include <algorithm>
 #include <chrono>
@@ -82,20 +75,6 @@ autoware_vehicle_msgs::msg::SteeringReport to_steering_report(
   return steer;
 }
 
-std::vector<geometry_msgs::msg::Point> convert_centerline_to_points(
-  const lanelet::Lanelet & lanelet)
-{
-  std::vector<geometry_msgs::msg::Point> centerline_points;
-  for (const auto & point : lanelet.centerline()) {
-    geometry_msgs::msg::Point center_point;
-    center_point.x = point.basicPoint().x();
-    center_point.y = point.basicPoint().y();
-    center_point.z = point.basicPoint().z();
-    centerline_points.push_back(center_point);
-  }
-  return centerline_points;
-}
-
 SimplePlanningSimulator::SimplePlanningSimulator(const rclcpp::NodeOptions & options)
 : Node("simple_planning_simulator", options), tf_buffer_(get_clock()), tf_listener_(tf_buffer_)
 {
@@ -103,16 +82,12 @@ SimplePlanningSimulator::SimplePlanningSimulator(const rclcpp::NodeOptions & opt
   origin_frame_id_ = declare_parameter("origin_frame_id", "odom");
   add_measurement_noise_ = declare_parameter("add_measurement_noise", false);
   simulate_motion_ = declare_parameter<bool>("initial_engage_state");
-  enable_road_slope_simulation_ = declare_parameter("enable_road_slope_simulation", false);
   enable_pub_steer_ = declare_parameter("enable_pub_steer", true);
 
   using rclcpp::QoS;
   using std::placeholders::_1;
   using std::placeholders::_2;
 
-  sub_map_ = create_subscription<LaneletMapBin>(
-    "input/vector_map", rclcpp::QoS(10).transient_local(),
-    std::bind(&SimplePlanningSimulator::on_map, this, _1));
   sub_init_pose_ = create_subscription<PoseWithCovarianceStamped>(
     "input/initialpose", QoS{1}, std::bind(&SimplePlanningSimulator::on_initialpose, this, _1));
   sub_init_twist_ = create_subscription<TwistStamped>(
@@ -411,45 +386,6 @@ rcl_interfaces::msg::SetParametersResult SimplePlanningSimulator::on_parameter(
   return result;
 }
 
-double SimplePlanningSimulator::calculate_ego_pitch() const
-{
-  const double ego_x = vehicle_model_ptr_->getX();
-  const double ego_y = vehicle_model_ptr_->getY();
-  const double ego_yaw = vehicle_model_ptr_->getYaw();
-
-  geometry_msgs::msg::Pose ego_pose;
-  ego_pose.position.x = ego_x;
-  ego_pose.position.y = ego_y;
-  ego_pose.orientation = autoware_utils_geometry::create_quaternion_from_yaw(ego_yaw);
-
-  // calculate prev/next point of lanelet centerline nearest to ego pose.
-  auto opt = autoware::experimental::lanelet2_utils::get_closest_lanelet_within_constraint(
-    road_lanelets_, ego_pose, 2.0, std::numeric_limits<double>::max());
-  if (!opt.has_value()) {
-    return 0.0;
-  }
-  lanelet::Lanelet ego_lanelet = autoware::experimental::lanelet2_utils::remove_const(*opt);
-  const auto centerline_points = convert_centerline_to_points(ego_lanelet);
-  const size_t ego_seg_idx =
-    autoware::motion_utils::findNearestSegmentIndex(centerline_points, ego_pose.position);
-
-  const auto & prev_point = centerline_points.at(ego_seg_idx);
-  const auto & next_point = centerline_points.at(ego_seg_idx + 1);
-
-  // calculate ego yaw angle on lanelet coordinates
-  const double lanelet_yaw = std::atan2(next_point.y - prev_point.y, next_point.x - prev_point.x);
-  const double ego_yaw_against_lanelet = ego_yaw - lanelet_yaw;
-
-  // calculate ego pitch angle considering ego yaw.
-  const double diff_z = next_point.z - prev_point.z;
-  const double diff_xy = std::hypot(next_point.x - prev_point.x, next_point.y - prev_point.y) /
-                         std::cos(ego_yaw_against_lanelet);
-  const bool reverse_sign = std::cos(ego_yaw_against_lanelet) < 0.0;
-  const double ego_pitch_angle =
-    reverse_sign ? -std::atan2(-diff_z, -diff_xy) : -std::atan2(diff_z, diff_xy);
-  return ego_pitch_angle;
-}
-
 void SimplePlanningSimulator::on_timer()
 {
   if (!is_initialized_) {
@@ -458,11 +394,9 @@ void SimplePlanningSimulator::on_timer()
     return;
   }
 
-  // calculate longitudinal acceleration by slope
-  constexpr double gravity_acceleration = -9.81;
-  const double ego_pitch_angle = calculate_ego_pitch();
-  const double slope_angle = enable_road_slope_simulation_ ? -ego_pitch_angle : 0.0;
-  const double acc_by_slope = gravity_acceleration * std::sin(slope_angle);
+  // Road slope needs a lanelet map, which the ART stack doesn't publish, so the road is flat.
+  constexpr double ego_pitch_angle = 0.0;
+  constexpr double acc_by_slope = 0.0;
 
   // update vehicle dynamics
   {
@@ -521,23 +455,6 @@ void SimplePlanningSimulator::on_timer()
   if (vehicle_model_ptr_->shouldPublishActuationStatus()) {
     publish_actuation_status();
   }
-}
-
-void SimplePlanningSimulator::on_map(const LaneletMapBin::ConstSharedPtr msg)
-{
-  auto lanelet_map_ptr = autoware::experimental::lanelet2_utils::from_autoware_map_msgs(*msg);
-
-  auto routing_graph_and_traffic_rules =
-    autoware::experimental::lanelet2_utils::instantiate_routing_graph_and_traffic_rules(
-      lanelet_map_ptr);
-
-  lanelet::routing::RoutingGraphPtr routing_graph_ptr =
-    autoware::experimental::lanelet2_utils::remove_const(routing_graph_and_traffic_rules.first);
-  lanelet::traffic_rules::TrafficRulesPtr traffic_rules_ptr =
-    routing_graph_and_traffic_rules.second;
-
-  lanelet::ConstLanelets all_lanelets = lanelet::utils::query::laneletLayer(lanelet_map_ptr);
-  road_lanelets_ = lanelet::utils::query::roadLanelets(all_lanelets);
 }
 
 void SimplePlanningSimulator::on_initialpose(const PoseWithCovarianceStamped::ConstSharedPtr msg)

@@ -41,7 +41,6 @@ def launch_setup(context, *args, **kwargs):
 
     # Base remappings
     remappings = [
-        ("input/vector_map", "/map/vector_map"),
         ("input/initialpose", "/initialpose3d"),
         ("input/ackermann_control_command", "/control/command/control_cmd"),
         ("input/actuation_command", "/control/command/actuation_cmd"),
